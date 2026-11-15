@@ -41,6 +41,7 @@ void pipecat_init_wifi() {
   ESP_ERROR_CHECK(esp_wifi_init(&cfg));
   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
   ESP_ERROR_CHECK(esp_wifi_start());
+  esp_wifi_set_ps(WIFI_PS_NONE);  // power save off: some mesh routers drop traffic to sleeping clients
 
   ESP_LOGI(LOG_TAG, "Connecting to WiFi SSID: %s", WIFI_SSID);
   wifi_config_t wifi_config;
@@ -49,6 +50,9 @@ void pipecat_init_wifi() {
           sizeof(wifi_config.sta.ssid));
   strncpy((char *)wifi_config.sta.password, (char *)WIFI_PASSWORD,
           sizeof(wifi_config.sta.password));
+  // Mesh Wi-Fi: scan every channel and join the strongest node, not the first one found
+  wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+  wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
   ESP_ERROR_CHECK(esp_wifi_set_config(
       static_cast<wifi_interface_t>(ESP_IF_WIFI_STA), &wifi_config));
