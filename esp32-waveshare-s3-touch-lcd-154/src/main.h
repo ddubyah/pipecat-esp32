@@ -14,6 +14,9 @@ extern void pipecat_init_audio_decoder();
 extern void pipecat_init_audio_encoder();
 extern void pipecat_send_audio(PeerConnection *peer_connection);
 extern void pipecat_audio_decode(uint8_t *data, size_t size);
+// Listening: when off, the mic sends silence (the connection stays up).
+extern bool pipecat_is_listening();
+extern void pipecat_set_listening(bool listening);
 
 // WebRTC / Signalling
 extern void pipecat_init_webrtc();
@@ -38,3 +41,5 @@ extern void pipecat_init_screen();
 extern void pipecat_screen_system_log(const char *text);
 extern void pipecat_screen_new_log();
 extern void pipecat_screen_log(const char *text);
+// PLUS button: toggles listening.
+extern void pipecat_init_button();

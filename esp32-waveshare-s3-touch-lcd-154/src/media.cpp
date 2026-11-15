@@ -28,6 +28,10 @@ void set_is_playing(int16_t *in_buf, size_t in_samples) {
   is_playing = any_set;
 }
 
+std::atomic<bool> is_listening = true;
+bool pipecat_is_listening() { return is_listening; }
+void pipecat_set_listening(bool listening) { is_listening = listening; }
+
 esp_codec_dev_handle_t mic_codec_dev = NULL;
 esp_codec_dev_handle_t spk_codec_dev = NULL;
 
@@ -115,7 +119,7 @@ void pipecat_send_audio(PeerConnection *peer_connection) {
     return;
   }
 
-  if (is_playing) {
+  if (is_playing || !is_listening) {
     memset(read_buffer, 0, PCM_BUFFER_SIZE);
   }
 
