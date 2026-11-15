@@ -76,7 +76,7 @@ static char *rtvi_message_to_string(rtvi_msg_t *msg) {
 
 static void rtvi_handle_message(const rtvi_msg_t *msg) {
   cJSON *j_type = cJSON_GetObjectItem(msg->msg, "type");
-  if (j_type == NULL) {
+  if (!cJSON_IsString(j_type)) {
     ESP_LOGE(LOG_TAG, "Unable to find `type` field in RTVI message");
     return;
   }
@@ -91,7 +91,19 @@ static void rtvi_handle_message(const rtvi_msg_t *msg) {
     case hash("bot-tts-text"): {
       cJSON *j_data = cJSON_GetObjectItem(msg->msg, "data");
       cJSON *j_text = cJSON_GetObjectItem(j_data, "text");
-      rtvi_callbacks->on_bot_tts_text(j_text->valuestring);
+      if (cJSON_IsString(j_text)) {
+        rtvi_callbacks->on_bot_tts_text(j_text->valuestring);
+      }
+      break;
+    }
+    case hash("user-transcription"): {
+      cJSON *j_data = cJSON_GetObjectItem(msg->msg, "data");
+      cJSON *j_text = cJSON_GetObjectItem(j_data, "text");
+      cJSON *j_final = cJSON_GetObjectItem(j_data, "final");
+      if (cJSON_IsString(j_text)) {
+        rtvi_callbacks->on_user_transcription(j_text->valuestring,
+                                              cJSON_IsTrue(j_final));
+      }
       break;
     }
     default:

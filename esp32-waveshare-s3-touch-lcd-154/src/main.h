@@ -28,6 +28,7 @@ typedef struct {
   void (*on_bot_started_speaking)();
   void (*on_bot_stopped_speaking)();
   void (*on_bot_tts_text)(const char *text);
+  void (*on_user_transcription)(const char *text, bool final);
 } rtvi_callbacks_t;
 
 extern rtvi_callbacks_t pipecat_rtvi_callbacks;
@@ -41,5 +42,10 @@ extern void pipecat_init_screen();
 extern void pipecat_screen_system_log(const char *text);
 extern void pipecat_screen_new_log();
 extern void pipecat_screen_log(const char *text);
+// Captions: safe to call from any task; the screen redraws on its own task.
+extern void pipecat_screen_user_text(const char *text, bool final);
+extern void pipecat_screen_bot_text(const char *text);
+extern void pipecat_screen_bot_done();
+
 // PLUS button: toggles listening.
 extern void pipecat_init_button();

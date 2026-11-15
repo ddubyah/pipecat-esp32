@@ -38,3 +38,11 @@ CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y
 
 # esp_codec_dev uses the new i2c_master driver
 CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE=n
+
+# LVGL screen: captions and the listening indicator. LVGL allocates with
+# malloc, so big buffers can go to PSRAM.
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
