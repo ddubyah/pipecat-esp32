@@ -40,3 +40,7 @@ void board_power_hold();
 
 // Create the speaker (ES8311) and mic (ES7210) codec devices. Not opened yet.
 void board_audio_init(esp_codec_dev_handle_t *mic, esp_codec_dev_handle_t *spk);
+
+// After opening the mic: read back the ES7210's mic 1 registers and restart the
+// codec until they are right (setup can go wrong after a reset mid-call).
+bool board_mic_check(esp_codec_dev_handle_t mic, float gain_db);

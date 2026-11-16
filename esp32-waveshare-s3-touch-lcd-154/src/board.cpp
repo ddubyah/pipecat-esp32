@@ -8,10 +8,17 @@
 #include <esp_codec_dev_defaults.h>
 #include <esp_log.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 #include <cassert>
 
 #define BOARD_TAG "board"
 #define BOARD_SAMPLE_RATE 16000
+
+// Kept for board_mic_check(): reading back the ES7210's registers.
+static const audio_codec_ctrl_if_t *mic_ctrl_if = NULL;
+static const audio_codec_if_t *mic_codec_if = NULL;
 
 void board_power_hold() {
   gpio_config_t io_conf = {};
@@ -138,6 +145,8 @@ void board_audio_init(esp_codec_dev_handle_t *mic, esp_codec_dev_handle_t *spk) 
                             ES7120_SEL_MIC3 | ES7120_SEL_MIC4;
   const audio_codec_if_t *in_codec_if = es7210_codec_new(&es7210_cfg);
   assert(in_codec_if);
+  mic_ctrl_if = in_ctrl_if;
+  mic_codec_if = in_codec_if;
 
   dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
   dev_cfg.codec_if = in_codec_if;
@@ -145,4 +154,50 @@ void board_audio_init(esp_codec_dev_handle_t *mic, esp_codec_dev_handle_t *spk) 
   assert(*mic);
 
   ESP_LOGI(BOARD_TAG, "Audio codecs created (ES8311 out, ES7210 in)");
+}
+
+// ES7210 registers that must read back as set for mic 1 (TDM slot 0) to work.
+// After an ESP32 reset in the middle of a call the codec sometimes NACKs I2C
+// reads during setup, and the driver's read-modify-writes then write wrong
+// values (e.g. mic gain 0 dB instead of 30 dB), so the mic is near silent.
+static bool mic_regs_ok(float gain_db) {
+  struct { int reg; int mask; int want; } checks[] = {
+      {0x00, 0xff, 0x41},  // reset register: running
+      {0x01, 0x0b, 0x00},  // clock off: mic 1/2 ADC clocks on
+      {0x06, 0xff, 0x00},  // power down: all on
+      {0x47, 0xff, 0x08},  // mic 1 power
+      {0x4b, 0xff, 0x00},  // mic 1/2 bias, ADC and PGA power
+      {0x43, 0x1f, 0x10 | (int)(gain_db / 3)},  // mic 1 PGA on + gain step
+  };
+  bool ok = true;
+  for (auto &c : checks) {
+    int v = 0;
+    if (mic_ctrl_if->read_reg(mic_ctrl_if, c.reg, 1, &v, 1) != 0) {
+      ESP_LOGW(BOARD_TAG, "ES7210 reg 0x%02x: read failed", c.reg);
+      ok = false;
+    } else if ((v & c.mask) != c.want) {
+      ESP_LOGW(BOARD_TAG, "ES7210 reg 0x%02x = 0x%02x, want 0x%02x (mask 0x%02x)",
+               c.reg, v, c.want, c.mask);
+      ok = false;
+    }
+  }
+  return ok;
+}
+
+bool board_mic_check(esp_codec_dev_handle_t mic, float gain_db) {
+  for (int attempt = 1; attempt <= 5; attempt++) {
+    if (mic_regs_ok(gain_db)) {
+      ESP_LOGI(BOARD_TAG, "Mic codec checked OK%s",
+               attempt > 1 ? " after repair" : "");
+      return true;
+    }
+    ESP_LOGW(BOARD_TAG, "Mic codec misconfigured, restarting it (attempt %d)", attempt);
+    mic_codec_if->enable(mic_codec_if, false);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    mic_codec_if->enable(mic_codec_if, true);
+    esp_codec_dev_set_in_gain(mic, gain_db);
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  ESP_LOGE(BOARD_TAG, "Mic codec still misconfigured: the mic may be silent");
+  return false;
 }
