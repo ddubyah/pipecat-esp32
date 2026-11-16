@@ -44,9 +44,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
       }
       if (esp_http_client_is_chunked_response(evt->client)) {
         ESP_LOGE(LOG_TAG, "Chunked HTTP response not supported");
-#ifndef LINUX_BUILD
-        esp_restart();
-#endif
+        break;  // no answer is copied, so parsing it fails and the call ends
       }
 
       if (output_len == 0 && evt->user_data) {
@@ -79,7 +77,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
   return ESP_OK;
 }
 
-void pipecat_http_request(char *offer, char *answer) {
+bool pipecat_http_request(char *offer, char *answer) {
   esp_http_client_config_t config;
   memset(&config, 0, sizeof(esp_http_client_config_t));
 
@@ -96,17 +94,17 @@ void pipecat_http_request(char *offer, char *answer) {
   cJSON *j_offer = cJSON_CreateObject();
   if (j_offer == NULL) {
     ESP_LOGE(LOG_TAG, "Unable to create JSON offer");
-    return;
+    return false;
   }
   if (cJSON_AddStringToObject(j_offer, "sdp", offer) == NULL) {
     cJSON_Delete(j_offer);
     ESP_LOGE(LOG_TAG, "Unable to create JSON offer");
-    return;
+    return false;
   }
   if (cJSON_AddStringToObject(j_offer, "type", "offer") == NULL) {
     cJSON_Delete(j_offer);
     ESP_LOGE(LOG_TAG, "Unable to create JSON offer");
-    return;
+    return false;
   }
 
   ESP_LOGD(LOG_TAG, "OFFER\n%s", offer);
@@ -144,31 +142,27 @@ void pipecat_http_request(char *offer, char *answer) {
              retryable && time_left ? ", retrying" : "");
     esp_http_client_cleanup(client);
     if (!retryable || !time_left) {
-#ifndef LINUX_BUILD
-      esp_restart();
-#endif
       free(j_offer_str);
-      return;
+      return false;
     }
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
     delay_ms = MIN(delay_ms * 2, 8000);
   }
   free(j_offer_str);
 
+  esp_http_client_cleanup(client);
+
   cJSON *j_response = cJSON_Parse((const char *)answer);
   if (j_response == NULL) {
     ESP_LOGE(LOG_TAG, "Error parsing HTTP response");
-#ifndef LINUX_BUILD
-    esp_restart();
-#endif
+    return false;
   }
 
   cJSON *j_answer = cJSON_GetObjectItem(j_response, "sdp");
-  if (j_answer == NULL) {
+  if (!cJSON_IsString(j_answer)) {
     ESP_LOGE(LOG_TAG, "Unable to find `sdp` field in response");
-#ifndef LINUX_BUILD
-    esp_restart();
-#endif
+    cJSON_Delete(j_response);
+    return false;
   }
 
   memset(answer, 0, MAX_HTTP_OUTPUT_BUFFER + 1);
@@ -177,6 +171,5 @@ void pipecat_http_request(char *offer, char *answer) {
   ESP_LOGD(LOG_TAG, "ANSWER\n%s", answer);
 
   cJSON_Delete(j_response);
-
-  esp_http_client_cleanup(client);
+  return true;
 }

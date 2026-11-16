@@ -14,7 +14,6 @@
 
 static int rtvi_id = 0;
 static QueueHandle_t rtvi_queue;
-static PeerConnection *peer_connection = NULL;
 static rtvi_callbacks_t *rtvi_callbacks = NULL;
 
 typedef struct {
@@ -122,17 +121,18 @@ static void rtvi_task(void *pvParameter) {
   }
 }
 
-void pipecat_init_rtvi(PeerConnection *connection,
-                       rtvi_callbacks_t *callbacks) {
-  peer_connection = connection;
+void pipecat_init_rtvi(rtvi_callbacks_t *callbacks) {
   rtvi_callbacks = callbacks;
 
   rtvi_queue = xQueueCreate(10, sizeof(rtvi_msg_t));
   xTaskCreatePinnedToCore(rtvi_task, "RTVI Task", 4096, NULL, 2, NULL, 1);
 }
 
-void pipecat_rtvi_send_client_ready() {
-  rtvi_msg_t *msg = create_rtvi_message("client-ready");
+static void send_rtvi(PeerConnection *peer_connection, const char *type) {
+  rtvi_msg_t *msg = create_rtvi_message(type);
+  if (msg == NULL) {
+    return;
+  }
 
   char *msg_str = rtvi_message_to_string(msg);
 
@@ -141,6 +141,14 @@ void pipecat_rtvi_send_client_ready() {
   cJSON_free(msg_str);
 
   destroy_rtvi_message(msg);
+}
+
+void pipecat_rtvi_send_client_ready(PeerConnection *peer_connection) {
+  send_rtvi(peer_connection, "client-ready");
+}
+
+void pipecat_rtvi_send_disconnect_bot(PeerConnection *peer_connection) {
+  send_rtvi(peer_connection, "disconnect-bot");
 }
 
 void pipecat_rtvi_handle_message(const char *msg) {

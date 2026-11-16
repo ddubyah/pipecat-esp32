@@ -1,7 +1,9 @@
 // Screen for the Waveshare ESP32-S3-Touch-LCD-1.54 (ST7789 240x240), drawn
 // with LVGL through esp_lvgl_port.
 //
-// Top: a bar showing whether the mic is listening or paused.
+// Top: a bar showing the call: Waking up... (calling the bot), Listening,
+// Paused (PLUS), or Sleeping (no call: hung up, or the bot hung up), with a
+// hint below to press a button.
 // Below: captions, "You:" (what the child said) and "Pet:" (the bot's words,
 // as they are spoken), newest text at the bottom.
 //
@@ -33,6 +35,8 @@
 
 #define COLOR_LISTENING 0x2E7D32  // green
 #define COLOR_PAUSED 0xC62828     // red
+#define COLOR_WAKING 0xE65100     // orange
+#define COLOR_SLEEPING 0x37474F   // grey-blue
 #define COLOR_YOU 0x80D8FF        // light blue
 #define COLOR_PET 0xFFE082        // yellow
 
@@ -155,22 +159,58 @@ static lv_obj_t *status_label;
 static lv_obj_t *captions;
 static lv_obj_t *you_label;
 static lv_obj_t *pet_label;
-static int shown_listening = -1;
+static lv_obj_t *hint_label;
 
-static void show_listening(bool listening) {
-  lv_obj_set_style_bg_color(status_bar,
-                            lv_color_hex(listening ? COLOR_LISTENING : COLOR_PAUSED), 0);
-  // A solid dot while listening, a hollow one while paused.
-  lv_obj_set_style_bg_opa(status_dot, listening ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-  lv_label_set_text(status_label, listening ? "Listening" : "Paused");
+enum status_t { STATUS_NONE, STATUS_WAKING, STATUS_LISTENING, STATUS_PAUSED, STATUS_SLEEPING };
+static status_t shown_status = STATUS_NONE;
+
+static status_t current_status() {
+  switch (pipecat_call_state()) {
+    case CALL_CONNECTING:
+      return STATUS_WAKING;
+    case CALL_CONNECTED:
+      return pipecat_is_listening() ? STATUS_LISTENING : STATUS_PAUSED;
+    default:
+      return STATUS_SLEEPING;
+  }
+}
+
+static void show_status(status_t status) {
+  uint32_t color = COLOR_SLEEPING;
+  const char *text = "Sleeping";
+  switch (status) {
+    case STATUS_WAKING: color = COLOR_WAKING; text = "Waking up..."; break;
+    case STATUS_LISTENING: color = COLOR_LISTENING; text = "Listening"; break;
+    case STATUS_PAUSED: color = COLOR_PAUSED; text = "Paused"; break;
+    default: break;
+  }
+  lv_obj_set_style_bg_color(status_bar, lv_color_hex(color), 0);
+  // A solid dot while listening, a hollow one otherwise.
+  lv_obj_set_style_bg_opa(status_dot,
+                          status == STATUS_LISTENING ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+  lv_label_set_text(status_label, text);
+  if (status == STATUS_SLEEPING) {
+    lv_obj_remove_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(captions, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(captions, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 // Runs in the LVGL task, which already holds the LVGL lock.
 static void refresh_timer_cb(lv_timer_t *timer) {
-  bool listening = pipecat_is_listening();
-  if ((int)listening != shown_listening) {
-    show_listening(listening);
-    shown_listening = listening;
+  status_t status = current_status();
+  if (status != shown_status) {
+    if (status == STATUS_WAKING) {
+      // A new call is a new conversation: start with empty captions.
+      xSemaphoreTake(captions_mutex, portMAX_DELAY);
+      clear_captions();
+      captions_dirty = true;
+      xSemaphoreGive(captions_mutex);
+    }
+    show_status(status);
+    shown_status = status;
   }
 
   static char you_line[2 * CAPTION_MAX + 8];
@@ -251,6 +291,16 @@ static void build_ui() {
 
   you_label = make_caption_label(captions, COLOR_YOU);
   pet_label = make_caption_label(captions, COLOR_PET);
+
+  hint_label = lv_label_create(scr);
+  lv_obj_set_width(hint_label, BOARD_LCD_WIDTH - 24);
+  lv_label_set_long_mode(hint_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(hint_label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(hint_label, lv_color_white(), 0);
+  lv_label_set_text(hint_label, "Press a button to wake me up");
+  lv_obj_align(hint_label, LV_ALIGN_CENTER, 0, STATUS_BAR_HEIGHT / 2);
+  lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
 
   lv_timer_create(refresh_timer_cb, SCREEN_REFRESH_MS, NULL);
 }

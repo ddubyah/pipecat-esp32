@@ -1,4 +1,5 @@
 #include <esp_codec_dev.h>
+#include <esp_timer.h>
 #include <esp_heap_caps.h>
 #include <opus.h>
 
@@ -17,6 +18,9 @@
 #define OPUS_ENCODER_BITRATE 30000
 #define OPUS_ENCODER_COMPLEXITY 0
 
+// The bot sends a frame every 20 ms; with none for this long, it isn't playing.
+#define PLAYING_TIMEOUT_US (200 * 1000)
+
 // Set after opening, and checked by board_mic_check(). 30 dB matches the level
 // the mic ran at in every working test so far (quiet room peaks ~75); the old
 // 42 dB, set before opening, did not stick. At 0 dB the mic is near silent.
@@ -26,6 +30,7 @@
 // #define AUDIO_DIAG
 
 std::atomic<bool> is_playing = false;
+std::atomic<int64_t> last_decode_us = 0;
 std::atomic<int> diag_dec_frames = 0;  // AUDIO_DIAG: bot frames since the last report
 std::atomic<int> diag_dec_peak = 0;
 void set_is_playing(int16_t *in_buf, size_t in_samples) {
@@ -39,6 +44,7 @@ void set_is_playing(int16_t *in_buf, size_t in_samples) {
     if (a > peak) peak = a;
   }
   is_playing = any_set;
+  last_decode_us = esp_timer_get_time();
   diag_dec_frames++;
   if (peak > diag_dec_peak) diag_dec_peak = peak;
 }
@@ -46,6 +52,15 @@ void set_is_playing(int16_t *in_buf, size_t in_samples) {
 std::atomic<bool> is_listening = true;
 bool pipecat_is_listening() { return is_listening; }
 void pipecat_set_listening(bool listening) { is_listening = listening; }
+
+// Playing = the last frame from the bot had sound in it, and it was recent.
+// Without the time check, a bot that stops sending mid-word would leave the
+// mic muted for good.
+static bool bot_is_playing() {
+  return is_playing && esp_timer_get_time() - last_decode_us < PLAYING_TIMEOUT_US;
+}
+
+void pipecat_audio_call_ended() { is_playing = false; }
 
 esp_codec_dev_handle_t mic_codec_dev = NULL;
 esp_codec_dev_handle_t spk_codec_dev = NULL;
@@ -130,7 +145,7 @@ void pipecat_init_audio_encoder() {
   encoder_output_buffer = (uint8_t *)malloc(OPUS_BUFFER_SIZE);
 }
 
-void pipecat_send_audio(PeerConnection *peer_connection) {
+void pipecat_send_audio() {
   if (esp_codec_dev_read(mic_codec_dev, read_buffer, PCM_BUFFER_SIZE) !=
       ESP_OK) {
     printf("esp_codec_dev_read failed");
@@ -145,23 +160,30 @@ void pipecat_send_audio(PeerConnection *peer_connection) {
       int a = abs(pcm[i]);
       if (a > mic_peak) mic_peak = a;
     }
-    if (is_playing || !is_listening) muted++;
+    if (bot_is_playing() || !is_listening) muted++;
     if (++frames >= 50) {
       ESP_LOGI(LOG_TAG, "DIAG mic_peak=%d muted=%d/50 playing=%d listening=%d dec_frames=%d dec_peak=%d",
-               mic_peak, muted, (int)is_playing, (int)is_listening,
+               mic_peak, muted, (int)bot_is_playing(), (int)is_listening,
                diag_dec_frames.exchange(0), diag_dec_peak.exchange(0));
       frames = mic_peak = muted = 0;
     }
   }
 #endif
 
-  if (is_playing || !is_listening) {
+  // The mic is always read (above), so the I2S buffer never backs up, but
+  // nothing is sent without a call or while paused.
+  if (pipecat_call_state() != CALL_CONNECTED || !is_listening) {
+    return;
+  }
+
+  if (bot_is_playing()) {
     memset(read_buffer, 0, PCM_BUFFER_SIZE);
   }
 
   auto encoded_size = opus_encode(opus_encoder, (const opus_int16 *)read_buffer,
                                   PCM_BUFFER_SIZE / sizeof(uint16_t),
                                   encoder_output_buffer, OPUS_BUFFER_SIZE);
-  peer_connection_send_audio(peer_connection, encoder_output_buffer,
-                             encoded_size);
+  if (encoded_size > 0) {
+    pipecat_webrtc_send_audio(encoder_output_buffer, encoded_size);
+  }
 }
