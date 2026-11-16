@@ -74,7 +74,11 @@ static void pipecat_on_icecandidate_task(char *description, void *user_data) {
 
 void pipecat_init_webrtc() {
   PeerConfiguration peer_connection_config = {
-      .ice_servers = {},
+      // STUN gives the board its public address (a server-reflexive candidate), so a
+      // cloud bot that can only use a TURN relay can still reach it.
+      .ice_servers = {{.urls = "stun:stun.cloudflare.com:3478",
+                       .username = NULL,
+                       .credential = NULL}},
       .audio_codec = CODEC_OPUS,
       .video_codec = CODEC_NONE,
       .datachannel = DATA_CHANNEL_STRING,
