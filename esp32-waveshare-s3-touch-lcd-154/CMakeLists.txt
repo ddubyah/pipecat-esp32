@@ -19,6 +19,11 @@ endif()
 
 add_compile_definitions(PIPECAT_SMALLWEBRTC_URL="$ENV{PIPECAT_SMALLWEBRTC_URL}")
 
+# Optional: sent as `Authorization: Bearer <BOT_TOKEN>` with the offer (the cloud bot checks it)
+if(DEFINED ENV{BOT_TOKEN} AND NOT "$ENV{BOT_TOKEN}" STREQUAL "")
+  add_compile_definitions(PIPECAT_BOT_TOKEN="$ENV{BOT_TOKEN}")
+endif()
+
 set(COMPONENTS src)
 set(EXTRA_COMPONENT_DIRS "src" "../esp32-s3-box-3/components/srtp" "../esp32-s3-box-3/components/peer" "../esp32-s3-box-3/components/esp-libopus")
 

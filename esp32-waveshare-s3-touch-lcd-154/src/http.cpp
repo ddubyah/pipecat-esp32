@@ -1,7 +1,11 @@
 #include <cJSON.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <string.h>
+#ifndef LINUX_BUILD
+#include <esp_crt_bundle.h>
+#endif
 
 #include "main.h"
 
@@ -33,6 +37,11 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
       break;
     case HTTP_EVENT_ON_DATA: {
       ESP_LOGD(LOG_TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+      // An error page (e.g. a 502 while a sleeping cloud bot wakes) is not the
+      // answer: skip it, and the request is retried.
+      if (esp_http_client_get_status_code(evt->client) != 200) {
+        break;
+      }
       if (esp_http_client_is_chunked_response(evt->client)) {
         ESP_LOGE(LOG_TAG, "Chunked HTTP response not supported");
 #ifndef LINUX_BUILD
@@ -78,6 +87,9 @@ void pipecat_http_request(char *offer, char *answer) {
   config.event_handler = http_event_handler;
   config.timeout_ms = HTTP_TIMEOUT_MS;
   config.user_data = answer;
+#ifndef LINUX_BUILD
+  config.crt_bundle_attach = esp_crt_bundle_attach;  // for an https bot URL
+#endif
 
   ESP_LOGI(LOG_TAG, "Connecting to %s", config.url);
 
@@ -103,20 +115,45 @@ void pipecat_http_request(char *offer, char *answer) {
 
   cJSON_Delete(j_offer);
 
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  esp_http_client_set_method(client, HTTP_METHOD_POST);
-  esp_http_client_set_header(client, "Content-Type", "application/json");
-  esp_http_client_set_post_field(client, j_offer_str, strlen(j_offer_str));
-
-  esp_err_t err = esp_http_client_perform(client);
-  int status_code = esp_http_client_get_status_code(client);
-  if (err != ESP_OK || status_code != 200) {
-    ESP_LOGE(LOG_TAG, "Error perform http request %s (status %d)",
-             esp_err_to_name(err), status_code);
-#ifndef LINUX_BUILD
-    esp_restart();
+  // A cloud bot that is asleep may refuse the first requests (502) or not
+  // answer while it wakes, so retry with backoff for about 30 s.
+  const int64_t give_up_at_us = esp_timer_get_time() + OFFER_RETRY_FOR_MS * 1000LL;
+  int delay_ms = 1000;
+  esp_http_client_handle_t client;
+  for (int attempt = 1;; attempt++) {
+    client = esp_http_client_init(&config);
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+#ifdef PIPECAT_BOT_TOKEN
+    esp_http_client_set_header(client, "Authorization", "Bearer " PIPECAT_BOT_TOKEN);
 #endif
+    esp_http_client_set_post_field(client, j_offer_str, strlen(j_offer_str));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status_code = esp_http_client_get_status_code(client);
+    if (err == ESP_OK && status_code == 200) {
+      break;
+    }
+
+    bool retryable = err != ESP_OK || status_code == 502 ||
+                     status_code == 503 || status_code == 504;
+    bool time_left =
+        esp_timer_get_time() + delay_ms * 1000LL < give_up_at_us;
+    ESP_LOGE(LOG_TAG, "Offer attempt %d failed: %s (status %d)%s", attempt,
+             esp_err_to_name(err), status_code,
+             retryable && time_left ? ", retrying" : "");
+    esp_http_client_cleanup(client);
+    if (!retryable || !time_left) {
+#ifndef LINUX_BUILD
+      esp_restart();
+#endif
+      free(j_offer_str);
+      return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    delay_ms = MIN(delay_ms * 2, 8000);
   }
+  free(j_offer_str);
 
   cJSON *j_response = cJSON_Parse((const char *)answer);
   if (j_response == NULL) {

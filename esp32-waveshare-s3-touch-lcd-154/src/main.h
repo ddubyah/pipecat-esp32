@@ -3,6 +3,7 @@
 #define LOG_TAG "pipecat"
 #define MAX_HTTP_OUTPUT_BUFFER 4096
 #define HTTP_TIMEOUT_MS 10000
+#define OFFER_RETRY_FOR_MS 30000
 #define TICK_INTERVAL 15
 
 // Wifi
